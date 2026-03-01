@@ -2,195 +2,228 @@
 audio_generator.py - Generates AI voiceover audio using Edge TTS (free).
 
 Uses Microsoft Edge TTS to convert reel scripts to MP3 audio with
-word-level timestamps for subtitle synchronization.
+estimated phrase-level timestamps for subtitle synchronization.
 """
 
 import asyncio
 import json
 import os
 import re
-import tempfile
-from pathlib import Path
 
 import edge_tts
 
 # Voice options (all free, no API key needed)
 VOICES = {
-    "male": "en-US-ChristopherNeural",      # Clear, engaging male voice
-    "male_alt": "en-US-GuyNeural",           # Deeper male voice
-    "female": "en-US-JennyNeural",           # Clear female voice
-    "female_alt": "en-US-AriaNeural",        # Expressive female voice
+    "male": "en-US-ChristopherNeural",
+    "male_alt": "en-US-GuyNeural",
+    "female": "en-US-JennyNeural",
+    "female_alt": "en-US-AriaNeural",
 }
 
 DEFAULT_VOICE = VOICES["male"]
-
-# Speech rate adjustments
-RATE = "+10%"        # Slightly faster for engaging pace
-VOLUME = "+0%"
+RATE = "+10%"
 
 
-async def generate_audio_with_timestamps(text, output_path, voice=None):
+async def generate_audio(text, output_path, voice=None):
     """
-    Generate MP3 audio and word-level timestamps from text using Edge TTS.
-
-    Returns:
-        dict with keys:
-            - audio_path: path to generated MP3
-            - subtitles: list of {text, start_ms, end_ms} for each word/phrase
-            - duration_ms: total audio duration in milliseconds
+    Generate MP3 audio from text using Edge TTS.
+    Returns sentence boundaries for subtitle timing.
     """
     voice = voice or DEFAULT_VOICE
-    subtitles = []
+    sentences = []
 
-    communicate = edge_tts.Communicate(text, voice, rate=RATE, volume=VOLUME)
+    communicate = edge_tts.Communicate(text, voice, rate=RATE)
 
-    # Collect subtitle data from the stream
-    audio_chunks = []
     with open(output_path, "wb") as audio_file:
         async for chunk in communicate.stream():
             if chunk["type"] == "audio":
                 audio_file.write(chunk["data"])
             elif chunk["type"] == "WordBoundary":
-                subtitles.append({
+                sentences.append({
                     "text": chunk["text"],
-                    "start_ms": chunk["offset"] // 10000,  # Convert 100-nanosecond units to ms
+                    "start_ms": chunk["offset"] // 10000,
+                    "duration_ms": chunk["duration"] // 10000,
+                })
+            elif chunk["type"] == "SentenceBoundary":
+                sentences.append({
+                    "text": chunk["text"],
+                    "start_ms": chunk["offset"] // 10000,
                     "duration_ms": chunk["duration"] // 10000,
                 })
 
     # Calculate end times
-    for sub in subtitles:
-        sub["end_ms"] = sub["start_ms"] + sub["duration_ms"]
+    for s in sentences:
+        s["end_ms"] = s["start_ms"] + s["duration_ms"]
 
-    # Get total duration
-    duration_ms = subtitles[-1]["end_ms"] if subtitles else 0
-
-    return {
-        "audio_path": output_path,
-        "subtitles": subtitles,
-        "duration_ms": duration_ms,
-    }
+    total_ms = sentences[-1]["end_ms"] if sentences else 0
+    return {"sentences": sentences, "duration_ms": total_ms}
 
 
-def group_subtitles_into_phrases(subtitles, max_words=5, max_duration_ms=2500):
+def estimate_phrase_timing(voiceover_parts, total_duration_ms):
     """
-    Group word-level subtitles into display phrases for on-screen text.
-
-    Groups words into phrases of max_words or max_duration_ms,
-    whichever limit is hit first.
+    Estimate timing for each voiceover part based on word count.
+    This is used when Edge TTS only provides sentence-level boundaries.
     """
+    # Count words in each part
+    word_counts = [len(part.split()) for part in voiceover_parts]
+    total_words = sum(word_counts)
+    if total_words == 0:
+        total_words = 1
+
     phrases = []
-    current_words = []
-    current_start = None
+    current_ms = 0
 
-    for sub in subtitles:
-        if current_start is None:
-            current_start = sub["start_ms"]
+    for i, (part, wc) in enumerate(zip(voiceover_parts, word_counts)):
+        # Allocate duration proportional to word count
+        part_duration = int((wc / total_words) * total_duration_ms)
+        # Add a small gap between parts
+        gap = 200 if i < len(voiceover_parts) - 1 else 0
 
-        current_words.append(sub["text"])
-        current_end = sub["end_ms"]
-        current_duration = current_end - current_start
-
-        if len(current_words) >= max_words or current_duration >= max_duration_ms:
-            phrases.append({
-                "text": " ".join(current_words),
-                "start_ms": current_start,
-                "end_ms": current_end,
-                "duration_ms": current_end - current_start,
-            })
-            current_words = []
-            current_start = None
-
-    # Don't forget the last phrase
-    if current_words:
         phrases.append({
-            "text": " ".join(current_words),
-            "start_ms": current_start,
-            "end_ms": subtitles[-1]["end_ms"],
-            "duration_ms": subtitles[-1]["end_ms"] - current_start,
+            "text": part,
+            "start_ms": current_ms,
+            "end_ms": current_ms + part_duration - gap,
+            "duration_ms": part_duration - gap,
         })
+        current_ms += part_duration
 
     return phrases
+
+
+def split_into_display_phrases(phrases, max_words=6):
+    """
+    Split longer phrases into shorter display chunks for on-screen captions.
+    """
+    display_phrases = []
+
+    for phrase in phrases:
+        words = phrase["text"].split()
+        total_words = len(words)
+        if total_words == 0:
+            continue
+
+        chunk_count = max(1, (total_words + max_words - 1) // max_words)
+        words_per_chunk = max(1, total_words // chunk_count)
+        phrase_duration = phrase["duration_ms"]
+        ms_per_word = phrase_duration / max(total_words, 1)
+
+        word_idx = 0
+        for c in range(chunk_count):
+            # Take next chunk of words
+            end_idx = min(word_idx + words_per_chunk, total_words)
+            if c == chunk_count - 1:
+                end_idx = total_words
+
+            chunk_words = words[word_idx:end_idx]
+            if not chunk_words:
+                break
+
+            start_ms = phrase["start_ms"] + int(word_idx * ms_per_word)
+            end_ms = phrase["start_ms"] + int(end_idx * ms_per_word)
+
+            display_phrases.append({
+                "text": " ".join(chunk_words),
+                "start_ms": start_ms,
+                "end_ms": end_ms,
+                "duration_ms": end_ms - start_ms,
+            })
+            word_idx = end_idx
+
+    return display_phrases
 
 
 def generate_audio_for_reel(script, output_dir, reel_num, voice=None):
     """
     Generate audio for a complete reel script.
 
-    Args:
-        script: dict from content_selector with voiceover_parts
-        output_dir: directory to save audio files
-        reel_num: reel number (1, 2, 3)
-        voice: optional voice override
-
-    Returns:
-        dict with audio_path, phrases (grouped subtitles), duration_ms
+    Returns dict with audio_path, phrases (for display), duration_ms/duration_s.
     """
     os.makedirs(output_dir, exist_ok=True)
 
-    # Build the full voiceover text with natural pauses
     parts = script.get("voiceover_parts", [])
-    # Add brief pauses between sections
+    # Join with pauses
     full_text = ". ".join(parts)
-    # Clean up any double periods or weird punctuation
-    full_text = re.sub(r'\.{2,}', '.', full_text)
-    full_text = re.sub(r'\s+', ' ', full_text).strip()
+    full_text = re.sub(r"\.{2,}", ".", full_text)
+    full_text = re.sub(r"\s+", " ", full_text).strip()
 
     audio_path = os.path.join(output_dir, f"reel_{reel_num:02d}_audio.mp3")
 
-    # Run async TTS
-    result = asyncio.run(
-        generate_audio_with_timestamps(full_text, audio_path, voice)
-    )
+    # Generate audio
+    result = asyncio.run(generate_audio(full_text, audio_path, voice))
+    total_ms = result["duration_ms"]
 
-    # Group word-level subtitles into display phrases
-    phrases = group_subtitles_into_phrases(result["subtitles"])
+    # If Edge TTS gave us sentence boundaries, use them
+    if result["sentences"]:
+        # Map sentence boundaries to our voiceover parts
+        phrases = estimate_phrase_timing(parts, total_ms)
+    else:
+        # Fallback: estimate from audio duration using ffprobe
+        total_ms = _get_audio_duration_ms(audio_path)
+        phrases = estimate_phrase_timing(parts, total_ms)
 
-    # Save subtitle data as JSON for video composer
+    # Split into display-friendly captions
+    display_phrases = split_into_display_phrases(phrases)
+
+    # Save subtitle data
     subs_path = os.path.join(output_dir, f"reel_{reel_num:02d}_subs.json")
     with open(subs_path, "w") as f:
         json.dump({
-            "phrases": phrases,
-            "duration_ms": result["duration_ms"],
-            "word_subtitles": result["subtitles"],
+            "phrases": [{"text": p["text"], "start_ms": p["start_ms"],
+                         "end_ms": p["end_ms"], "duration_ms": p["duration_ms"]}
+                        for p in display_phrases],
+            "duration_ms": total_ms,
         }, f, indent=2)
+
+    duration_s = total_ms / 1000 if total_ms > 0 else _get_audio_duration_s(audio_path)
 
     return {
         "audio_path": audio_path,
         "subs_path": subs_path,
-        "phrases": phrases,
-        "duration_ms": result["duration_ms"],
-        "duration_s": result["duration_ms"] / 1000,
+        "phrases": display_phrases,
+        "duration_ms": max(total_ms, int(duration_s * 1000)),
+        "duration_s": max(duration_s, 1.0),
     }
 
 
-async def list_voices():
-    """List all available Edge TTS voices (for reference)."""
-    voices = await edge_tts.list_voices()
-    en_voices = [v for v in voices if v["Locale"].startswith("en-")]
-    for v in en_voices:
-        print(f"{v['ShortName']:40s} {v['Gender']:10s} {v['Locale']}")
+def _get_audio_duration_ms(path):
+    """Get audio duration in ms using ffprobe as fallback."""
+    return int(_get_audio_duration_s(path) * 1000)
+
+
+def _get_audio_duration_s(path):
+    """Get audio duration in seconds using ffprobe."""
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", path],
+            capture_output=True, text=True, timeout=10,
+        )
+        return float(result.stdout.strip())
+    except Exception:
+        # Rough estimate from file size (MP3 ~16kB/s at default quality)
+        try:
+            size = os.path.getsize(path)
+            return size / 16000
+        except Exception:
+            return 30.0
 
 
 if __name__ == "__main__":
-    import sys
+    # Test: generate a sample reel audio
+    test_script = {
+        "voiceover_parts": [
+            "This AI tool just changed everything",
+            "Claude Code can now build entire apps from a single prompt",
+            "It works with n8n to automate your entire workflow",
+            "The best part? It's only 20 dollars a month",
+            "Follow for daily AI tools and tips",
+        ]
+    }
 
-    if len(sys.argv) > 1 and sys.argv[1] == "voices":
-        asyncio.run(list_voices())
-    else:
-        # Test: generate a sample reel audio
-        test_script = {
-            "voiceover_parts": [
-                "This AI tool just changed everything",
-                "Claude Code can now build entire apps from a single prompt",
-                "It works with n8n to automate your entire workflow",
-                "The best part? It's only 20 dollars a month",
-                "Follow for daily AI tools and tips",
-            ]
-        }
-
-        result = generate_audio_for_reel(test_script, "output/test", 1)
-        print(f"Audio: {result['audio_path']}")
-        print(f"Duration: {result['duration_s']:.1f}s")
-        print(f"Phrases: {len(result['phrases'])}")
-        for p in result["phrases"]:
-            print(f"  [{p['start_ms']/1000:.1f}s - {p['end_ms']/1000:.1f}s] {p['text']}")
+    result = generate_audio_for_reel(test_script, "output/test", 1)
+    print(f"Audio: {result['audio_path']}")
+    print(f"Duration: {result['duration_s']:.1f}s")
+    print(f"Phrases: {len(result['phrases'])}")
+    for p in result["phrases"]:
+        print(f"  [{p['start_ms']/1000:.1f}s - {p['end_ms']/1000:.1f}s] {p['text']}")
