@@ -1,0 +1,22 @@
+# Output
+output/
+
+# Environment
+.env
+__pycache__/
+*.pyc
+
+# State
+state.json
+
+# Temp files
+temp/
+*.tmp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
