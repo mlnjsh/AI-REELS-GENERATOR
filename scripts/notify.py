@@ -71,7 +71,9 @@ def generate_email_html(reels_info):
                     <li>Caption text file with hashtags</li>
                 </ul>
                 <p style="color:#888; font-size:13px;">
-                    Find your reels in the <code style="color:#0af;">output/{datetime.now().strftime('%Y-%m-%d')}/</code> folder.
+                    Find your reels at:<br>
+                    <code style="color:#0af;">AI-REELS-GENERATOR/output/{datetime.now().strftime('%Y-%m-%d')}/</code><br>
+                    <span style="color:#666;">(inside your Desktop/Projects folder)</span>
                 </p>
             </div>
 
