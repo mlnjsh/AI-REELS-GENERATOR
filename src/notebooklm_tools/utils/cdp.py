@@ -29,6 +29,16 @@ _cached_ws_url: str | None = None
 
 from notebooklm_tools.core.exceptions import AuthenticationError
 
+__all__ = [
+    "get_chrome_path",
+    "get_supported_browsers",
+    "extract_cookies_via_cdp",
+    "extract_cookies_via_existing_cdp",
+    "run_headless_auth",
+    "has_chrome_profile",
+    "terminate_chrome",
+]
+
 CDP_DEFAULT_PORT = 9222
 CDP_PORT_RANGE = range(9222, 9232)  # Ports to scan for existing/available
 NOTEBOOKLM_URL = "https://notebooklm.google.com/"
@@ -243,9 +253,6 @@ def get_chrome_path() -> str | None:
     Search order (all platforms): Google Chrome → Arc (macOS) → Brave →
     Microsoft Edge → Chromium → Vivaldi → Opera.
 
-    Falls back to the original hardcoded Google Chrome path for each platform
-    as a last resort so behaviour is identical to pre-refactor when no other
-    browser is found (i.e. the old single-path check).
     """
     system = platform.system()
 
@@ -253,9 +260,7 @@ def get_chrome_path() -> str | None:
         for _name, path in _macos_browser_candidates():
             if Path(path).exists():
                 return path
-        # Original fallback: the path that was hardcoded before this refactor
-        fallback = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-        return fallback if Path(fallback).exists() else None
+        return None
 
     elif system == "Linux":
         for _name, exe in _LINUX_BROWSER_CANDIDATES:
@@ -267,9 +272,7 @@ def get_chrome_path() -> str | None:
         for _name, path in _windows_browser_candidates():
             if Path(path).exists():
                 return path
-        # Original fallback
-        fallback = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
-        return fallback if Path(fallback).exists() else None
+        return None
 
     return None
 
@@ -757,17 +760,6 @@ def extract_cookies_via_cdp(
     result["reused_existing"] = reused_existing
     return result
 
-
-# make get_supported_browsers importable alongside get_chrome_path
-__all__ = [
-    "get_chrome_path",
-    "get_supported_browsers",
-    "extract_cookies_via_cdp",
-    "extract_cookies_via_existing_cdp",
-    "run_headless_auth",
-    "has_chrome_profile",
-    "terminate_chrome",
-]
 
 
 def extract_cookies_via_existing_cdp(
