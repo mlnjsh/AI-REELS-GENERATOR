@@ -81,3 +81,34 @@ MIT
 ---
 
 *Built with Python, Edge TTS, MoviePy, and YouTube Data API*
+
+
+---
+
+## Contributors & Domain Experts
+
+<table>
+  <tr>
+    <td align="center">
+      <a href="https://github.com/mlnjsh">
+        <img src="https://github.com/mlnjsh.png" width="80px;" alt="Milan Amrut Joshi"/><br />
+        <sub><b>Milan Amrut Joshi</b></sub>
+      </a><br />
+      <sub>Project Author</sub>
+    </td>
+    <td align="center">
+      <a href="https://github.com/yt-dlp">
+        <img src="https://github.com/yt-dlp.png" width="80px;" alt="yt-dlp Team"/><br />
+        <sub><b>yt-dlp Team</b></sub>
+      </a><br />
+      <sub>Video extraction and processing</sub>
+    </td>
+    <td align="center">
+      <a href="https://github.com/openai">
+        <img src="https://github.com/openai.png" width="80px;" alt="OpenAI"/><br />
+        <sub><b>OpenAI</b></sub>
+      </a><br />
+      <sub>GPT & DALL-E for content generation</sub>
+    </td>
+  </tr>
+</table>
